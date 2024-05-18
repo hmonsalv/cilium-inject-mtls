@@ -1,0 +1,13 @@
+{
+  "names": [
+    {
+      "C":  "AU",
+      "O":  "Panubo",
+      "ST": "New South Wales"
+    }
+  ],
+  "key": {
+    "algo": "ecdsa",
+    "size": 256
+  }
+}

@@ -1,0 +1,11 @@
+operator:
+  replicas: 1
+ingressController: # Required for CEC functionality
+  enabled: true
+kubeProxyReplacement: "partial" # Required from 1.13+ if Ingress/Gateway API enabled
+nodePort: # CEC often depends on Cilium’s BPF NodePort exposure feature
+  enabled: true
+hubble:
+  enabled: true
+  relay:
+    enabled: true

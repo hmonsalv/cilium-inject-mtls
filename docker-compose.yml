@@ -1,0 +1,25 @@
+version: "3.9"  # optional since v1.27.0
+services:
+  echoserver:
+    image: docker.io/panubo/echo-server:1.0
+    ports:
+      - "8081:8081"
+    networks:
+      - kind
+  haproxy:
+    image: docker.io/panubo/haproxy:2.5.12
+    ports:
+      - "8083:8083"
+    networks:
+      - kind
+    volumes:
+      - ./haproxy:/etc/haproxy
+      - ./certs:/etc/certs
+    command:
+      - haproxy
+      - -f
+      - /etc/haproxy/haproxy.cfg
+networks:
+  kind:
+    name: kind
+    external: true
