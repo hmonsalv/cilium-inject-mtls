@@ -1,26 +1,16 @@
-# Cilium Inject mTLS Example
+# Cilium Inject mTLS
 
 ## About This Lab
 
-In this lab we are going to make use of a `Cilium Service Mesh` Envoy L7 advance feature to redirect all traffic that goes to a given destination IP/FQDN to an `Envoy listener` where we will inject an `mTLS` (Mutual TLS) client certificate.
+In this lab we are going to make use of a `Cilium Service Mesh` Envoy L7 advanced feature to redirect all traffic for a given destination to an `Envoy listener` where we will inject an `mTLS` (Mutual TLS) client certificate.
 
 This is specially usefull when you want to communicate from your k8s cluster to a backend service that requires mTLS authentication, and you don't want to modify your application code to handle mTLS.
 
 This scenario is also applicable when you want to use a third-party solution that offers some CRDs to interact with a custom backend, but this CRD doesn't support mTLS authentication natively. An example could be `Flux CD` `notification-controller` that provides a `Provider` CRD where you can define a generic webhook (see [here](https://fluxcd.io/flux/components/notification/providers/#generic-webhook)) to send notifications to a custom backend that you might want to build enforcing mTLS authentication, but this `Provider` CRD doesn't support mTLS natively to inject the client certificate to the requests.
 
+> **Remark:** while this lab will give you step-by-step instructions to complete it successfully, it's recommended to have some knowledge of `Cilium Service Mesh` and `Envoy`. You can check this talk from the KubeCon EU 2024 where my coleague [@edgrz](https://github.com/edgrz) and I talk in depth about this Cilium feature that allows you to redirect specific traffic in your k8s cluster to an Envoy proxy to apply advanced L7 configurations: [Cilium + eBPF Day - KubeCon 2024 - Meshing It Up Securely](https://www.youtube.com/watch?v=kC8efabCH6s&list=PLj6h78yzYM2PHDqy_nINY8-462uYzb18d&index=10).
+
 ## Lab Environment
-
-This lab will be formed by the following components:
-
-- A `kind` k8s cluster running with Cilium CNI where Cilium Service Mesh capabilities are enabled.
-- A `haproxy` container - running in the docker kind network - that listens on port `8083` and enforces mTLS authentication, redirecting all traffic to the `echo-server` container.
-- An `echo-server` container - running in the docker kind network - that listens on port `8081` acting as an echo HTTP server that responses with the request (and all its headers) that just arrived.
-
-In addition, along this lab, we will be deploying the following components:
-
-- A `curl` pod in the `mtls-inject` namespace that will be used to perform some connectivity tests.
-- A `CiliumNetworkPolicy` that will redirect all traffic that goes to the `haproxy` container's IP:port to an `Envoy listener` where we will inject the mTLS client certificate.
-- A `CiliumClusterwideEnvoyConfig` that will define the `Envoy listener` that injects the mTLS client certificate to all request that arrive, and send the request to the actual destination (the `haproxy` IP:port).
 
 ### Diagram
 
@@ -30,9 +20,9 @@ In addition, along this lab, we will be deploying the following components:
 
 ## Pre-requisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop) installed (or any other desktop container platform like [Orbstack](https://orbstack.dev/)).
-- [Kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) installed.
-- [Helm](https://helm.sh/docs/intro/install/#from-script) installed.
+- [cfssl](https://formulae.brew.sh/formula/cfssl) installed.
+- [jq](https://jqlang.github.io/jq/download/) installed.
+- [make](https://opensource.com/article/18/8/what-how-makefile) installed.
 - [Hubble CLI](https://docs.cilium.io/en/stable/gettingstarted/hubble_setup/#install-the-hubble-client) installed (Optional).
 - [Curl](https://formulae.brew.sh/formula/curl) installed (Optional).
 
@@ -41,10 +31,15 @@ In addition, along this lab, we will be deploying the following components:
 ### Clone This Repository
 
 First, clone this repository.
+  
+```bash
+git clone https://github.com/hmonsalv/cilium-inject-mtls.git
+cd cilium-inject-mtls
+```
 
 ### Install Kind Kubernetes Cluster
 
-Then create the kind k8s cluster with Cilium CNI and Service Mesh required for this lab, you will need to follow these instructions:
+Then create a kind k8s cluster with Cilium CNI and Service Mesh features required for this lab, you will need to follow these instructions:
 
 - Install [kind cluster](./kubernetes/kind/README.md).
 - Install [Cilium](./kubernetes/cilium/README.md) in the kind cluster.
@@ -69,8 +64,8 @@ docker-compose up -d
 
 You can observe that it started 2 containers (as described in the diagram above):
 
-- the `echo-server` container that listens on port `8081`.
-- and the `haproxy` container that listens on port `8083` and enforces mTLS authentication.
+- the `haproxy` container that listens on port `8083` and enforces mTLS authentication, redirecting all traffic to the `echo-server` container.
+- and the `echo-server` container that listens on port `8081` acting as an echo HTTP server that responses with the request (and all its headers) that just arrived.
 
 > **Note:** both containers use the `kind` docker network for the sake of simplicity, as we are going to reach `haproxy` later on in this lab from a `Cilium Envoy listener` running inside the `cilium` pod of the `kind` k8s cluster (which runs in the `kind` docker network as well).
 
@@ -87,13 +82,9 @@ export KUBECONFIG=./kubernetes/cilium-inject-mtls-demo.config
 Let's create in the kind k8s cluster a `curl` pod in the `mtls-inject` namespace to perform some connectivity tests (notice that we are creating a secret with the client certificate and private key and mounting it in the pod's `/certs` folder):
 
 ```bash
+kubectl create namespace mtls-inject
 kubectl create --namespace mtls-inject secret tls tls-client-cert --key ./certs/client.key --cert ./certs/client.pem
 cat<<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: mtls-inject
----
 apiVersion: v1
 kind: Pod
 metadata:
@@ -189,7 +180,7 @@ command terminated with exit code 56
 
 Now we are going to leverage `Cilium Service Mesh` capabilities to redirect all traffic that goes to the `haproxy` container to an `Envoy listener` where we will inject the client mTLS client certificate.
 
-For this purpose we will crate the following Cilium CRs (custom resources):
+For this purpose we will create the following Cilium CRs (custom resources):
 
 - A `CiliumClusterwideEnvoyConfig` (`ccec`) that will define a Envoy listener (proxy) that injects the mTLS client certificate to all request that arrive, and send the request to the actual destination (the `haproxy` IP:port).
 - A `CiliumNetworkPolicy` (`cnp`) that will redirect all traffic that goes to the `haproxy` container's IP:port to that Envoy listener.
@@ -340,9 +331,18 @@ Open another terminal and run the following command to observe all egress traffi
 hubble observe --to-ip $HAPROXY_IP -f
 ```
 
-We can see with `Hubble` that the traffic from `mtls-inject/curl` pod with destrination to the `haproxy` container's IP:port has been redirected to the envoy proxy (see `to-proxy` action), and from there the envoy proxy establishes another `TCP` connection to the `haproxy` and sends the `HTTPS` request:
+We can see with `Hubble` that the traffic from `mtls-inject/curl` pod with destination to the `haproxy` container's IP:port has been redirected to the envoy proxy (see `to-proxy` action), and from there the envoy proxy establishes another `TCP` connection to the `haproxy` and sends the `HTTPS` request:
 
 ![Hubble Observe](./assets/hubble-observe.png)
+
+### Clean Up the Lab Environment
+
+To clean up the lab environment, you can run the following commands:
+
+```bash
+kind delete cluster --name cilium-inject-mtls-demo
+docker-compose down
+```
 
 ## Related Projects
 
